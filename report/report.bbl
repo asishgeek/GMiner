@@ -1,0 +1,36 @@
+\begin{thebibliography}{1}
+
+\bibitem{Wang2010}
+J.~Wang, M.~Li, Y.~Deng, and Y.~Pan, ``Recent advances in clustering methods
+  for protein interaction networks,'' {\em BMC genomics}, vol.~11, no.~Suppl 3,
+  p.~S10, 2010.
+
+\bibitem{Srinivasan1997}
+A.~Srinivasan, R.~D. King, S.~Muggleton, and M.~J. Sternberg, ``The predictive
+  toxicology evaluation challenge,'' in {\em IJCAI (1)}, pp.~4--9, Citeseer,
+  1997.
+
+\bibitem{Yan2002}
+X.~Yan and J.~Han, ``gspan: Graph-based substructure pattern mining,'' in {\em
+  Data Mining, 2002. ICDM 2003. Proceedings. 2002 IEEE International Conference
+  on}, pp.~721--724, IEEE, 2002.
+
+\bibitem{Cong2002}
+G.~Cong, L.~Yi, B.~Liu, and K.~Wang, ``Discovering frequent substructures from
+  hierarchical semi-structured data.,'' in {\em SDM}, 2002.
+
+\bibitem{Holder1994}
+L.~B. Holder, D.~J. Cook, and S.~Djoko, ``Substucture discovery in the subdue
+  system.,'' in {\em KDD Workshop}, pp.~169--180, 1994.
+
+\bibitem{Zou2010}
+R.~Zou and L.~B. Holder, ``Frequent subgraph mining on a single large graph
+  using sampling techniques,'' in {\em Proceedings of the Eighth Workshop on
+  Mining and Learning with Graphs}, pp.~171--178, ACM, 2010.
+
+\bibitem{Gary1979}
+M.~R. Gary and D.~S. Johnson, {\em Computers and Intractability: A Guide to the
+  Theory of NP-completeness}.
+\newblock WH Freeman and Company, New York, 1979.
+
+\end{thebibliography}
