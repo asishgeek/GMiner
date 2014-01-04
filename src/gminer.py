@@ -9,87 +9,154 @@ Frequency based labels are identified by the attribute "nl".
 '''
 MIN_FREQUENCY = 1
 
+PATTERNS = {} #Stores the edgeSets for each pattern specified by the DFS code.
+
 def main():
   g = createTestGraph()
   #plotGraph(g, g.vs["l"], g.es["l"])
   preprocessGraph(g)
   
-  p = Pattern(g, [g.es[0], g.es[1], g.es[2]])
-  print p.getDFSCode()
-  for cp in p.getChildPatterns():
-    print cp.getDFSCode()
-  p = p.getChildPatterns()[0]
-  for cp in p.getChildPatterns():
-    print cp.getDFSCode()
+  p = Pattern(g, [g.es[0], g.es[1]])
+  print "Initial pattern:"
+  print p
+  print "------------"
 
+  ig = createInstanceGraph(g,p)
+  cp = p.getChildPatterns()
+  print "Child patterns:"
+  for c in cp:
+    print c
+  print "-------------"
+
+  newIg = growInstanceGraph(g, cp[0], p, ig)
 
   label = map(lambda (x,y): "%s_%s"%(x,y), zip(g.vs["nl"], g.vs["indices"]))
   plotGraph(g, label, g.es["nl"])
+  #plotGraph(ig, map(str,ig.vs.indices), map(str,ig.es.indices))
 
   '''
-  ig = createInstanceGraph(g,["V0","E0","V0","E0","V1"])
-  newIg = growInstanceGraph(g, ig, ["V1", "V0"])
-  label = map(str, range(0,len(newIg.vs) - 1))
-  #plotGraph(newIg, [], [])
-  print newIg
-  
   #Create one edge graphs. S1 contains all the one edge graphs
   '''
 
-def growInstanceGraph(g, ig, e):
-  ''' Grow the instance graph ig by adding the edge e. e is a given by labels i.e. ["V0", "V1"]
-      Return the new instance graph. '''
+def growInstanceGraph(g, pattern, parentPattern, parentIg):
+  ''' Create the instance graph for pattern @pattern from its parent pattern @parentPattern whose
+      instance graph is given by @parentIg '''
+
+  childEdges = set([x.index for x in pattern.getEdgeList()]) 
+  parentEdges = set([x.index for x in parentPattern.getEdgeList()])
+  newEdgeIndex = childEdges.difference(parentEdges)
+
+  dfsCode = ".".join(pattern.getDFSCode())
+  print pattern.getDFSCode()
+
+  if dfsCode not in PATTERNS:
+    PATTERNS[dfsCode] = set()
+
+  if not newEdgeIndex:
+    return None
+  if len(newEdgeIndex) != 1:
+    raise Exception("Cannot grow instance graph beucase has child pattern has %d edges more than the parent pattern"%len(newEdgeIndex))
+  
+  newEdge = g.es[newEdgeIndex.pop()]
+  [v0, v1] = getVertices(g, newEdge) #V0 and V1 are the vertices of the new edge that is present in the child pattern
+
   newIg = Graph()
-  for v in ig.vs:
+  for v in parentIg.vs:
     cliqueSize = 0
+    newPatternList = []
     for gv in v["G"]:
-      if gv["nl"] != e[0]:
+      if gv["nl"] != v0["nl"]:
         continue
 
       for gu in gv.neighbors():
-        if gu["nl"] != e[1]:
+        if gu["nl"] != v1["nl"]:
           continue
-        print "Found desired edge"
+
+        e = getEdge(g, gv, gu)
+        if e.index in parentEdges:
+          continue
+
+        newPatternEdges = list(parentPattern.getEdgeList()) #TODO: Fix this.
+        newPatternEdges.append(e)
+        newPattern = Pattern(g, newPatternEdges)
+
+        if newPattern in PATTERNS[dfsCode]:
+          continue
+        PATTERNS[dfsCode].add(newPattern)
+
+        print newPattern
+        print
+
         cliqueSize += 1
+        newPatternList.append(newPattern)
         
-    nv = addClique(newIg, cliqueSize)
+    nv = addClique(newIg, cliqueSize, newPatternList)
     if nv:
       v["child"] = nv
   
   #Create edges between vertices of newIg
-  for eig in ig.es:
-    [v0, v1] = getVertices(ig, eig)
+  for eig in parentIg.es:
+    [v0, v1] = [v for v in parentIg.vs[eig.tuple]]
     if "chlid" in v0.attributes() and "chlid" in v1.attributes():
       cv0 = v0["child"] #cv0 is a node in newIg
       cv1 = v1["child"] #cv1 is a node in newIg
       newIg.add_edge(cv0, cv1)
 
-  #TODO: delete child attributes
+  if "child" in parentIg.vs.attributes():
+    del parentIg.vs["child"]
+
   return newIg
 
-def addClique(g, cliqueSize):
+def addClique(g, cliqueSize, newPatternList):
   if cliqueSize <= 0:
     return None
   
   g.add_vertex()
   vid = g.vs.indices[-1] # Id of the last added vertex
+
+  # Make links back to the original graph
+  vertices = [v.index for v in newPatternList[0].getVertices()]
+  for v in vertices:
+    g.vs[vid]["G"] = v
+
   for i in range(1, cliqueSize):
     g.add_vertex()
+    # Make links back to the original graph
+    vertices = [v.index for v in newPatternList[i].getVertices()]
+    for v in vertices:
+      g.vs[vid+i]["G"] = v
+    
     for j in range(i-1,-1,-1):
       g.add_edge(vid + j, vid + i)
 
 def createInstanceGraph(g, p):
-  ''' Creates the instance of graph of pattern p. Where p is a two edge graph
-      denoted by a list: e.g. [V0,E0,V1,E1,V2] '''
+  ''' Creates the instance of graph of pattern p. Where p is a pattern of two edges 
+      as follow: v0-(e0)-v1-(e1)-v2'''
+
+  if len(p.getEdgeList()) != 2:
+    raise Exception("More that 2 edges in pattern")
+
+  p = p.getDFSCode()
+  dfsCode = ".".join(p)
+  if dfsCode not in PATTERNS:
+    PATTERNS[dfsCode] = set()
   ig = Graph() #Instance graph
   for e0 in g.es(nl_eq = p[1]):
     (v0, v1) = getVertices(g,e0)
     if v0["nl"] == p[0] and v1["nl"] == p[2]:
       for v2 in v1.neighbors():
+        if v2.index == v0.index:
+          continue
         e1 = getEdge(g, v1, v2)
+        if e1.index == e0.index:
+          continue
 
         if e1["nl"] == p[3] and v2["nl"] == p[4]:
           # Found a pattern
+          newPattern = Pattern(g, [e0,e1])
+          if newPattern in PATTERNS[dfsCode]:
+            continue
+          PATTERNS[dfsCode].add(newPattern)
           pid = addPattern(ig, e0, e1)
           ''' Create connection between node of instance graph and the corresponding nodes 
           of the original graph. e.g. If v is a vertex in the instance graph then 
@@ -133,7 +200,7 @@ def getEdge(g, v1, v2):
 def getVertices(g, e):
   ''' Gets the vertices joined by the edge e '''
   vertices = [e.source, e.target]
-  vertices = sorted(vertices, key=lambda(x): g.vs[x]["nl"]) #Sort by lexicographic orider of labels
+  vertices = sorted(vertices, key=lambda(x): (g.vs[x]["nl"], x)) #Sort by lexicographic orider of labels
   return (g.vs[vertices[0]], g.vs[vertices[1]])
 
 
@@ -234,42 +301,43 @@ def computeDFSCode(G, edgeList):
   vertices = G.vs[vertexIndices]
   vertices = (sorted(vertices, key=lambda x: x['nl']))
   vertexSet = set(map(lambda x: x.index, vertices))
-  dfsCode = ""
+  edgeSet = set([e.index for e in edgeList])
+  dfsCode = []
   for v in vertices:
     if "visited" not in v.attributes():
       dfsCode = visit(v, dfsCode)
-      dfsCode = dfsVisit(G, v, dfsCode, vertexSet)
+      dfsCode = dfsVisit(G, v, dfsCode, vertexSet, edgeSet)
 
   del G.vs["visited"]
   del G.es["forward"]
   return dfsCode
 
-def dfsVisit(G, vertex, dfsCode, vertexSet):
-  #print "visiting: %d"%vertex.index
-  #print "dfsCode: %s"%dfsCode
+def dfsVisit(G, vertex, dfsCode, vertexSet, edgeSet):
   neighbors = sorted(vertex.neighbors(), key=lambda x: (x["nl"], getEdge(G, vertex, x)["nl"])) #Sort by vertex label followed by edge label
   for u in neighbors:
     if u.index not in vertexSet:
-      #print "%d not in vertex set"%u.index
+      continue
+    e = getEdge(G, vertex, u)
+    if e.index not in edgeSet:
       continue
     if "visited" in u.attributes() and u["visited"] == True:
-      #print "%d has already been visited"%u.index
       continue
 
-    e = getEdge(G, vertex, u)
     dfsCode = visit(e, dfsCode) 
     dfsCode = visit(u, dfsCode)
-    dfsCode = dfsVisit(G, u, dfsCode, vertexSet)
+    dfsCode = dfsVisit(G, u, dfsCode, vertexSet, edgeSet)
 
   #Get backward edges and add it in the DFS code
   for u in neighbors:
     if u.index not in vertexSet:
       continue
     e = getEdge(G, vertex, u)
+    if e.index not in edgeSet:
+      continue
     if "forward" in e.attributes() and e["forward"] == True:
       continue
     dfsCode = visit(e, dfsCode)
-    dfsCode += u["nl"]
+    dfsCode.append(u["nl"])
     
   return dfsCode
       
@@ -281,7 +349,8 @@ def visit(item, dfsCode):
     item["visited"] = True
   else:
     raise Exception("Invalid type of item should be either a vertex or an edge")
-  return (dfsCode + item["nl"])
+  dfsCode.append(item["nl"])
+  return dfsCode
 
 class Pattern:
   ''' A list of edges repsenting a pattern. The list of edges are sorted according to the DFS order. The DFS code of the
@@ -290,25 +359,37 @@ class Pattern:
   def __init__(self, G, edgeList):
     if type(edgeList) != list:
       raise Exception("argument must be a list of Edges")
-    self.edgeList = tuple(sorted(edgeList, key=lambda x: x["nl"]))
+    self.edgeList = tuple(sorted(edgeList, key=lambda x: (x["nl"], x.index)))
     self.G = G
-    self.dfsCode = computeDFSCode(G, edgeList)
+    self.dfsCode = tuple(computeDFSCode(G, edgeList))
 
     [source, target] = zip(*([e.tuple for e in edgeList]))
     vertexIndices = set(source + target)
     vertices = G.vs[vertexIndices]
-    self.vertices = sorted(vertices, key=lambda x: x['nl'])
+    self.vertices = tuple(sorted(vertices, key=lambda x: (x['nl'], x.index)))
+
+  def __key(self):
+    return (self.G.__hash__(),
+            tuple([e.index for e in self.edgeList]),
+            self.dfsCode,
+            tuple([v.index for v in self.vertices]))
 
   def __eq__(self, other):
     return (isinstance(other, self.__class__) and
-          self.__dict__ == other.__dict__)
+          self.__key() == other.__key())
 
   def __ne__(self, other):
     return not self.__eq__(other)
 
   def __hash__(self):
-    [keys, values] = zip(*(sorted(self.__dict__.iteritems(), key=lambda x: x[0])))
-    return hash(values)
+    return hash(self.__key())
+
+  def __str__(self):
+    val = "Graph: %d\n"%(self.G.__hash__())
+    val += "Edge List: %s\n"%(", ".join([str(e.index) for e in self.edgeList]))
+    val +="Vertices: %s\n"%(", ".join([str(v.index) for v in self.vertices]))
+    val += "DFS Code: %s\n"%(".".join(self.dfsCode))
+    return val
 
   def getDFSCode(self):
     return self.dfsCode
