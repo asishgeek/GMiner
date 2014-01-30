@@ -23,19 +23,25 @@ def main():
   print "------------"
 
   ig = createInstanceGraph(g,p)
+  print "Pattern instances:"
+  for (k,v) in INSTANCE_GRAPH_NODES.iteritems():
+    print "%d:"%v
+    print k
+    print k.__hash__()
+  print "********"
+
   cp = p.getChildPatterns()
   print "Child patterns:"
   for c in cp:
     print c
-  print "-------------"
+  print "********"
 
-  newIg = growInstanceGraph(g, cp[0], p, ig)
+  #newIg = growInstanceGraph(g, cp[0], p, ig)
 
   label = map(lambda (x,y): "%s_%d"%(x,y), zip(g.vs["nl"], g.vs.indices))
   plotGraph(g, label, g.es["nl"])
   plotGraph(ig, map(str,ig.vs.indices), map(str,ig.es.indices))
-  plotGraph(newIg, map(str,newIg.vs.indices), map(str,newIg.es.indices))
- 
+  #plotGraph(newIg, map(str,newIg.vs.indices), map(str,newIg.es.indices))
 
   '''
   #Create one edge graphs. S1 contains all the one edge graphs
@@ -49,8 +55,8 @@ def growInstanceGraph(g, pattern, parentPattern, parentIg):
   parentEdges = set([x.index for x in parentPattern.getEdgeList()])
   newEdgeIndex = childEdges.difference(parentEdges)
 
-  dfsCode = ".".join(pattern.getDFSCode())
-  parentDfsCode = ".".join(parentPattern.getDFSCode())
+  dfsCode = str(pattern.getDFSCode())
+  parentDfsCode = str(parentPattern.getDFSCode())
   print pattern.getDFSCode()
 
   if dfsCode not in PATTERNS:
@@ -95,7 +101,6 @@ def growInstanceGraph(g, pattern, parentPattern, parentIg):
         newIg.add_vertex()
         vid = newIg.vs[-1:].indices[0]
         INSTANCE_GRAPH_NODES[newPattern] = vid
-        
   
   #Create edges between vertices of newIg
   createInstanceGraphEdges(newIg, dfsCode) 
@@ -103,19 +108,19 @@ def growInstanceGraph(g, pattern, parentPattern, parentIg):
 
 def createInstanceGraph(g, p):
   ''' Creates the instance of graph of pattern p. Where p is a pattern of two edges 
-      as follow: v0-(e0)-v1-(e1)-v2'''
+      as follow: v0-(e0)-v1, v1-(e1)-v2'''
 
   if len(p.getEdgeList()) != 2:
     raise Exception("More that 2 edges in pattern")
 
   p = p.getDFSCode()
-  dfsCode = ".".join(p)
+  dfsCode = str(p)
   if dfsCode not in PATTERNS:
     PATTERNS[dfsCode] = set()
   ig = Graph() #Instance graph
   for e0 in g.es(nl_eq = p[1]):
     (v0, v1) = getVertices(g,e0)
-    if v0["nl"] == p[0] and v1["nl"] == p[2]:
+    if v0["nl"] == p[0][1] and v1["nl"] == p[2][1]:
       for v2 in v1.neighbors():
         if v2.index == v0.index:
           continue
@@ -123,7 +128,7 @@ def createInstanceGraph(g, p):
         if e1.index == e0.index:
           continue
 
-        if e1["nl"] == p[3] and v2["nl"] == p[4]:
+        if e1["nl"] == p[4] and v2["nl"] == p[5][1]:
           # Found a pattern
           newPattern = Pattern(g, [e0,e1])
           if newPattern in PATTERNS[dfsCode]:
@@ -270,54 +275,87 @@ def computeDFSCode(G, edgeList):
   dfsCodeList = []
   for v in [x for x in vertices if x['nl']==vertices[0]['nl']]:
       dfsCode = []
-      dfsCode = visit(v, dfsCode)
-      dfsCode = dfsVisit(G, v, dfsCode, vertexSet, edgeSet)
-      dfsCodeList.append(dfsCode)
+      v["visited"] = 0
+      time = 0
+      dfsCode = dfsVisit(G, v, dfsCode, vertexSet, edgeSet, time)
+      dfsCodeList.append(DfsCode(dfsCode))
 
       del G.vs["visited"]
       del G.es["forward"]
-  dfsCodeList = sorted(dfsCodeList, key=lambda x: "".join(x))
+  dfsCodeList = sorted(dfsCodeList, key=lambda x: str(x))
   return dfsCodeList[0] # Returns the minimun DFSCode
 
-def dfsVisit(G, vertex, dfsCode, vertexSet, edgeSet):
-  neighbors = sorted(vertex.neighbors(), key=lambda x: (x["nl"], getEdge(G, vertex, x)["nl"])) #Sort by vertex label followed by edge label
+def dfsVisit(G, vertex, dfsCode, vertexSet, edgeSet, time):
+  neighbors = sorted(vertex.neighbors(), key=lambda x: (x.attributes().get("visited", sys.maxsize),
+                              getEdge(G, vertex, x)["nl"],
+                              x["nl"])) # First get backward edges, and the sort 
+                              #forward edges by edge label followed by vertex label
   for u in neighbors:
     if u.index not in vertexSet:
       continue
     e = getEdge(G, vertex, u)
     if e.index not in edgeSet:
       continue
-    if "visited" in u.attributes() and u["visited"] == True:
-      continue
-
-    dfsCode = visit(e, dfsCode) 
-    dfsCode = visit(u, dfsCode)
-    dfsCode = dfsVisit(G, u, dfsCode, vertexSet, edgeSet)
-
-  #Get backward edges and add it in the DFS code
-  for u in neighbors:
-    if u.index not in vertexSet:
-      continue
-    e = getEdge(G, vertex, u)
-    if e.index not in edgeSet:
-      continue
+    
     if "forward" in e.attributes() and e["forward"] == True:
       continue
-    dfsCode = visit(e, dfsCode)
-    dfsCode.append(u["nl"])
+
+    if "visited" in u.attributes() and u["visited"]:
+      #This is a backward edge
+      if u["visited"] > vertex["visited"]:
+        raise Exception("Backward edge (u,v): (u)%d should be less than (v)%d"%(vertex["visited"], u["visited"])
+      dfsCode = visitEdge(G, (vertex, u), dfsCode) 
+    else:
+      #This is a forward edge
+      time += 1
+      u["visited"] = time
+      dfsCode = visitEdge(G, (vertex, u), dfsCode) 
+      dfsCode = dfsVisit(G, u, dfsCode, vertexSet, edgeSet, time)
     
   return dfsCode
       
-def visit(item, dfsCode):
-  #print "visiting item: %s"%str(item)
-  if type(item) == igraph.Edge:
-    item["forward"] = True
-  elif type(item) == igraph.Vertex:
-    item["visited"] = True
-  else:
-    raise Exception("Invalid type of item should be either a vertex or an edge")
-  dfsCode.append(item["nl"])
+def visitEdge(G, e, dfsCode):
+  ''' The dfscode is of the form: 
+  [(<visit time>,<vertex label>),<edge label>,(<visit time>, <vertex label>)]
+  '''
+  e["forward"] = True
+  v = [G.vs[e.source], G.vs[e.target]]
+  [v0, v1] = sorted(v, key=lambda x: x["visited"])
+  l = [(v0["visited"], v0["nl"]), e["nl"], (v1["visited"], v1["nl"])]
+  dfsCode += l
   return dfsCode
+
+class DfsCode:
+  ''' A class for DFSCode which encapsulates the order in which vertices and edges 
+      are visited as a list. '''
+  def __init__(self, dfsOrder):
+    if type(dfsOrder) != list:
+      raise Exception("The dfs order should be a list")
+    self.dfsCode = tuple(dfsOrder)
+    s = []
+    for x in self.dfsCode:
+      if type(x) == tuple:
+        s.append("%d_%s"%(x[0], x[1]))
+      else:
+        s.append(str(x))
+    self.dfsCodeString = ".".join(s)
+
+        
+  def __eq__(self, other):
+    return ((self.dfsCode == other.dfsCode) and
+      (self.dfsCodeString == other.dfsCodeString))
+
+  def __ne__(self, other):
+    return not self.__eq__(other)
+
+  def __hash__(self):
+    return hash((self.dfsCode, self.dfsCodeString))
+
+  def __str__(self):
+    return self.dfsCodeString
+
+  def __getitem__(self, i):
+    return self.dfsCode[i]
 
 class Pattern:
   ''' A list of edges repsenting a pattern. The list of edges are sorted according to the DFS order. The DFS code of the
@@ -328,7 +366,7 @@ class Pattern:
       raise Exception("argument must be a list of Edges")
     self.edgeList = tuple(sorted(edgeList, key=lambda x: (x["nl"], x.index)))
     self.G = G
-    self.dfsCode = tuple(computeDFSCode(G, edgeList))
+    self.dfsCode = computeDFSCode(G, edgeList)
 
     [source, target] = zip(*([e.tuple for e in edgeList]))
     vertexIndices = set(source + target)
@@ -355,7 +393,7 @@ class Pattern:
     val = "Graph: %d\n"%(self.G.__hash__())
     val += "Edge List: %s\n"%(", ".join([str(e.index) for e in self.edgeList]))
     val +="Vertices: %s\n"%(", ".join([str(v.index) for v in self.vertices]))
-    val += "DFS Code: %s\n"%(".".join(self.dfsCode))
+    val += "DFS Code: %s\n"%(str(self.dfsCode))
     return val
 
   def getDFSCode(self):
@@ -372,18 +410,30 @@ class Pattern:
     #Get the list of neighbors that are not part of the pattern.
     #Sort the list in lexicographic order of vertex followed by edge labels.
     vertexIndices = set(map(lambda x: x.index, self.vertices))
-    neighbors = [] # list of tuples of veritces and edges connecting the vertices to their corresponding vertices in pattern
+    edgeIndices = set(map(lambda x: x.index, self.edgeList))
+    rightmostVertex = self.G.vs[sorted(self.dfsOrder[-1], key=lambda x: x[0])[1][1]]
+    rightmostPath = [rightmostVertex] 
+    ''' The DFS Order is as follows:
+      [((t(v0), v0), (t(v1), v1)),
+       ((t(v1), v1), (t(v2), v2)),
+        ...]
+    '''
+    currentVertex = rightmostVertex
+    for e in self.dfsOrder[::-1]:
+      if e[0][0] > e[1][1]:
+        #This is a backward edge. Ignore.
+        continue
+      if e[1][1] == currentVertex:
+        self.G.vs[rightmostPath.append(e[0][1])]
+        currentVertex = e[0][1]
+      
 
-    for v in self.vertices:
-      for u in v.neighbors():
-        if u.index not in vertexIndices:
-          neighbors.append((u, getEdge(self.G, v, u)))
-    
-    neighbors = sorted(neighbors, key=lambda (v,e): (v["nl"], e["nl"]))
-    childPatterns = []
-    for e in zip(*neighbors)[1]:
-      p = Pattern(self.G, list(self.edgeList) + [e])
-      childPatterns.append(p)
+    #Check for backward edges from the rightmost vertex.
+    for v in rightmostVertex.neighbors():
+      e = getEdge(self.G, rightmostVertex, v)
+      if e.index in edgeIndices:
+        continue
+      
 
     return childPatterns
 
@@ -396,3 +446,6 @@ class Pattern:
 
 if __name__ == '__main__':
   sys.exit(main())
+
+#TODO: When computing single edge graphs. For each edge have two patterns where the direction of traversal of the pattern is
+# switched for the two patterns.
