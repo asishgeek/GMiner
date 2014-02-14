@@ -11,6 +11,8 @@ Original labels of vertices and edges are identified by the attribute "l".
 Frequency based labels are identified by the attribute "nl".
 '''
 
+MIN_FREQUENCY = 1
+
 PATTERN_INSTANCES = OrderedDict() # Stores the pattern instances for a pattern.
 
 
@@ -120,8 +122,6 @@ def getChildPatterns(G, p):
     instanceVertices = zip(*(map(lambda x: (G.es[x].source, G.es[x].target), instanceEdges)))
     instanceVertices = set(instanceVertices[0] + instanceVertices[1])
 
-    #print "Instance vertices = %s"%str(instanceVertices)
-
     #First check backward edges from the rightmost vertex.
     (trv, rv) = rpath[-1] #Rightmost vertex
     for (tv, v) in rpath[0:-1]:
@@ -136,7 +136,6 @@ def getChildPatterns(G, p):
           #This is not the minimum DFS Code. 
           continue
 
-        #print "Added backward edge (%d, %d, %s, %s, %s)"%(trv, tv, G.vs[rv]["nl"], G.es[eid]["nl"], G.vs[v]["nl"])
         if cp.dfsCode() in childPatterns:
           continue
         childPatterns[cp.dfsCode()] = cp
@@ -149,7 +148,6 @@ def getChildPatterns(G, p):
         if u in instanceVertices:
           continue
 
-        #print "node u = %d"%u
         
         eid = G.get_eid(v,u)
         cp = Pattern(p.edgeSequence + [(tv, trv+1,  G.vs[v]["nl"], G.es[eid]["nl"], G.vs[u]["nl"])])
@@ -157,7 +155,6 @@ def getChildPatterns(G, p):
           #This is not the minimum DFS Code. 
           continue
 
-        #print "Added forward edge: (%d, %d, %s, %s, %s)"%(tv, trv+1,  G.vs[v]["nl"], G.es[eid]["nl"], G.vs[u]["nl"])
         if cp.dfsCode() in childPatterns:
           continue
         childPatterns[cp.dfsCode()] = cp
@@ -253,7 +250,7 @@ def getPatternInstances(g, pattern, parentPattern):
   if pattern in PATTERN_INSTANCES:
     raise Exception("Pattern Already present: %s"%str(pattern))
 
-  patternInstances = {} 
+  childInstanceParentMap = {} #Stores the parent instance (value) for a child instance (key)
 
   childEdge = (set(pattern.edgeSequence)).difference(set(parentPattern.edgeSequence))
   if len(childEdge) > 1:
@@ -266,7 +263,6 @@ def getPatternInstances(g, pattern, parentPattern):
     rpath = getRightmostPath(instance)
     rmostVertex = g.vs[rpath[-1][1]]
     rmostTime = rpath[-1][0]
-    patternInstances[instance] = set([])
     # Check for backward edges.
     if tu > tv:
       #This is a backward edge. We only need to search from the rightmost vertex.
@@ -280,7 +276,7 @@ def getPatternInstances(g, pattern, parentPattern):
 
           if tx == tv and lv == g.vs[x]["nl"] and le == g.es[eindex]["nl"]:
             newInstance = PatternInstance(g, list(instance.dfsTree) + [(tu, tv, rmostVertex.index, x)])
-            patternInstances[instance].add(newInstance)
+            childInstanceParentMap[newInstance] = instance
       continue
       
     #Otherwise Check for forward edges
@@ -294,8 +290,8 @@ def getPatternInstances(g, pattern, parentPattern):
 
           if le == g.es[eindex]["nl"] and lv == y["nl"]:
             newInstance = PatternInstance(g, list(instance.dfsTree) + [(tu, tv, x, y.index)])
-            patternInstances[instance].add(newInstance)
-  return patternInstances
+            childInstanceParentMap[newInstance] = instance
+  return childInstanceParentMap
 
 def createInstanceGraphForPattern(pattern):
   instanceGraph = Graph()
@@ -332,10 +328,8 @@ def createTwoEdgeGraphs(g):
       for cp in getChildPatterns(g, p):
         if cp in PATTERN_INSTANCES:
           continue
-        patternInstances = getPatternInstances(g, cp, p)
-        allInstances = set([])
-        for instances in patternInstances.values():
-          allInstances = allInstances.union(instances)
+        childInstanceParentMap = getPatternInstances(g, cp, p)
+        allInstances = set(childInstanceParentMap.keys())
         PATTERN_INSTANCES[cp] =  allInstances
 
     for x in u.neighbors():
@@ -351,10 +345,8 @@ def createTwoEdgeGraphs(g):
       for cp in sorted(getChildPatterns(g, p), key=lambda x: x.dfsCode()):
         if cp in PATTERN_INSTANCES:
           continue
-        patternInstances = getPatternInstances(g, cp, p)
-        allInstances = set([])
-        for instances in patternInstances.values():
-          allInstances = allInstances.union(instances)
+        childInstanceParentMap = getPatternInstances(g, cp, p)
+        allInstances = set(childInstanceParentMap.keys())
         PATTERN_INSTANCES[cp] =  allInstances
 
 def isNeighboringCluster(cluster1, cluster2, g):
@@ -380,7 +372,6 @@ def mergePartitions(clustering, g):
         newClustering = igraph.clustering.VertexClustering(g, membership=m)
         if newClustering.modularity <= modularity:
           continue
-        print "modularity increased from %f to %f"%(modularity,newClustering.modularity)
         modularity = newClustering.modularity
         newMembership = m
   if id(clustering.membership) == id(newMembership):
@@ -401,7 +392,6 @@ def mergePartitions(clustering, g):
   return VertexClustering(g, membership=renumberedMembership)
  
 def subgraphMining(g, pattern, ig, clustering, frequentPatterns):
-  print "Subgraph mining for pattern: %s"%str(pattern)
   clustering = mergePartitions(clustering, ig)
   gMeasure = len(clustering)
   if gMeasure < 2: #TODO: Remove hadcoded threshold
@@ -413,37 +403,28 @@ def subgraphMining(g, pattern, ig, clustering, frequentPatterns):
   for cp in getChildPatterns(g, pattern):
     if cp in PATTERN_INSTANCES:
       continue
-    patternInstances = getPatternInstances(g, cp, pattern)
-    # Get all instances of child pattern
-    allInstances = set([])
-    for instances in patternInstances.values():
-      allInstances = allInstances.union(instances)
+    childInstanceParentMap = getPatternInstances(g, cp, pattern)
+    allInstances = set(childInstanceParentMap.keys())
     PATTERN_INSTANCES[cp] = allInstances
 
     #Create instance graph of child pattern
     childIg = createInstanceGraphForPattern(cp)
+
     #Assign child instances to clusters based on parent clusters
     clusterId = 0
     membership = []
-    for cluster in clustering:
-      print "Cluster: %s"%str(cluster)
+    parentClusterIds = {}
+    for cluster in clustering: #This is the clustering of the parent instance graph.
       for vertexIndex in cluster:
         parentInstance = ig.vs[vertexIndex]["instance"]
-        childInstances = patternInstances[parentInstance]
-        if not childInstances:
-          continue
-        print "Parent instance: %s"%str(parentInstance)
-        print "Child instances: %d"%len(childInstances)
-        print "membership: %s"%(",".join(map(str, membership)))
-        membership += [clusterId]*len(childInstances)
+        parentClusterIds[parentInstance] = clusterId;
       clusterId += 1
-   
-    try:
-      childIgClustering = VertexClustering(childIg, membership=membership)
-    except ValueError:
-      print "membership: %s"%(",".join(map(str, membership)))
-      print "childIg: %s"%(",".join([str(v.index) for v in childIg.vs]))
-      raise Exception("weird")
+
+    for childVertex in childIg.vs:
+      childInstance = childVertex["instance"] 
+      membership.append(parentClusterIds[childInstanceParentMap[childInstance]])
+
+    childIgClustering = VertexClustering(childIg, membership=membership)
 
     subgraphMining(g, cp, childIg, childIgClustering, frequentPatterns)
   return
@@ -466,6 +447,72 @@ def gminer(g, t, s):
 
   return frequentPatterns
 
+########## Preprocessing ################
+def preprocessGraph(g):
+  ''' Delete infrequent vertices and edges. Create new labels based on descending frequency. '''
+  #Delete infrequent vertices/edges. Returns vertex and edge frequencies
+  (vertexCount, edgeCount) = deleteInfrequentVerticesAndEdges(g)
+  
+  #Sort the vertex and edge counts in descending order
+  vertexCount = sorted(vertexCount, key=operator.itemgetter(1), reverse=True)
+  edgeCount = sorted(edgeCount, key=operator.itemgetter(1), reverse=True)
+  
+  #Re-label graph according to descending order of vertex and edge frequencies 
+  return relabelGraph(g, vertexCount, edgeCount)
+
+def deleteInfrequentVerticesAndEdges(g):
+  '''Delete infrequent vertices and edges.'''
+  vertexCount = {}
+  edgeCount = {}
+  for vertex in g.vs():
+    label = vertex["l"]
+    vertexCount[label] = vertexCount.get(label, 0) + 1
+
+  for edge in g.es():
+    label = edge["l"]
+    edgeCount[label] = edgeCount.get(label, 0) + 1
+  
+  sortedVertexCounts = sorted(vertexCount.iteritems(), key=lambda (x,y): y) #Sorts the map by values.
+  sortedEdgeCounts = sorted(edgeCount.iteritems(), key=lambda (x,y): y) #Sorts the map by values.
+  verticesToRemove = filter(lambda (x,y): y <= MIN_FREQUENCY, sortedVertexCounts)
+  edgesToRemove = filter(lambda (x,y): y<= MIN_FREQUENCY, sortedEdgeCounts)
+  
+  labels = map(operator.itemgetter(0), verticesToRemove) #Get the first component from each tuple from list of tuples
+  #Delete vertices with frequency less than MIN_FREQUENCY
+  for label in labels:
+    g.vs(l_eq = label).delete()
+  labels = map(operator.itemgetter(0), edgesToRemove) #Get the first component from each tuple from list of tuples
+  #Delete edges with frequency less than MIN_FREQUENCY
+  for label in labels:
+    g.es(l_eq = label).delete()
+  vertexCount = filter(lambda (x,y): y > MIN_FREQUENCY, vertexCount.iteritems())
+  edgeCount = filter(lambda (x,y): y > MIN_FREQUENCY, edgeCount.iteritems())
+  return (vertexCount, edgeCount)
+
+def relabelGraph(g, vertexCount, edgeCount):
+  ''' The way the new labels are generated as follows:
+    Vertices are labeled as V0, V1, ... and edges are labeled as E0, E1, ...
+    The new labels are consistent with the old labels i.e. vertices/edges that had the same label continue to have 
+    the same label.
+  '''
+  vertexLabelMap = {}
+  count = 0
+  for (label, freq) in vertexCount:
+    newLabel = "V%d"%count
+    vertexLabelMap[newLabel] = label
+    for v in g.vs(l_eq=label):
+      v["nl"] = newLabel #nl stands for new label
+    count += 1
+
+  edgeLabelMap = {}
+  count = 0
+  for (label, freq) in edgeCount:
+    newLabel = "E%d"%count
+    edgeLabelMap[newLabel] = label
+    for e in g.es(l_eq=label):
+      e["nl"] = newLabel #nl stands for new label
+    count += 1
+  return (vertexLabelMap, edgeLabelMap)
 
 #########Test Harness ##################
 
@@ -488,8 +535,8 @@ def createTestGraph():
   # Create edge labels
   #edge_labels = ["a", "a", "a", "a", "b", "b", "b", "c", "d"]
   edge_labels = ["a"]
-  g.vs["nl"] = vertex_lables #TODO: CHange label to "l"
-  g.es["nl"] = edge_labels #TODO: CHange label to "l"
+  g.vs["l"] = vertex_lables 
+  g.es["l"] = edge_labels 
 
   '''
   g = Graph([(0,1), (1,2), (2,0), (2,3)])
@@ -498,19 +545,22 @@ def createTestGraph():
   '''
   return g
 
+def relabelPattern(p, vertexLabelMap, edgeLabelMap):
+  newEdgeSequqence = map(lambda (tu, tv, lu, le, lv): (tu, tv, vertexLabelMap[lu], edgeLabelMap[le], vertexLabelMap[lv]),
+    p.edgeSequence)
+  return Pattern(newEdgeSequqence)
+  
+
 def main():
   g = createTestGraph()
 
-  vertexLabels = zip(g.vs["nl"], [str(v.index) for v in g.vs])
-  vertexLabels = map(lambda (x, y): x+y, vertexLabels)
-
-  #label = map(lambda (x,y): "%s_%d"%(x,y), zip(g.vs["nl"], g.vs.indices))
-  #plotGraph(g, label, g.es["nl"])
+  (vertexLabelMap, edgeLabelMap) = preprocessGraph(g)
 
   frequentPatterns = gminer(g, 1, None)
   print "Frequent Patterns:"
   for p in frequentPatterns:
-    print p
+    np = relabelPattern(p, vertexLabelMap, edgeLabelMap)
+    print "Pattern = %s, count = %d"%(np, len(PATTERN_INSTANCES[p]))
   
   
 if __name__ == "__main__":
