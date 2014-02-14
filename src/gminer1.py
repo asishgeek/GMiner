@@ -3,6 +3,7 @@ import sys
 import operator
 import igraph
 from igraph import Graph
+from igraph.clustering import VertexClustering
 from collections import OrderedDict
 
 ''' GMiner algorithm. http://dl.acm.org/citation.cfm?id=1598339
@@ -250,9 +251,9 @@ def getOneEdgeSubgraph(g):
 
 def getPatternInstances(g, pattern, parentPattern):
   if pattern in PATTERN_INSTANCES:
-    return PATTERN_INSTANCES[pattern]
+    raise Exception("Pattern Already present: %s"%str(pattern))
 
-  patternInstances = set([]) 
+  patternInstances = {} 
 
   childEdge = (set(pattern.edgeSequence)).difference(set(parentPattern.edgeSequence))
   if len(childEdge) > 1:
@@ -265,6 +266,7 @@ def getPatternInstances(g, pattern, parentPattern):
     rpath = getRightmostPath(instance)
     rmostVertex = g.vs[rpath[-1][1]]
     rmostTime = rpath[-1][0]
+    patternInstances[instance] = set([])
     # Check for backward edges.
     if tu > tv:
       #This is a backward edge. We only need to search from the rightmost vertex.
@@ -278,7 +280,7 @@ def getPatternInstances(g, pattern, parentPattern):
 
           if tx == tv and lv == g.vs[x]["nl"] and le == g.es[eindex]["nl"]:
             newInstance = PatternInstance(g, list(instance.dfsTree) + [(tu, tv, rmostVertex.index, x)])
-            patternInstances.add(newInstance)
+            patternInstances[instance].add(newInstance)
       continue
       
     #Otherwise Check for forward edges
@@ -292,8 +294,7 @@ def getPatternInstances(g, pattern, parentPattern):
 
           if le == g.es[eindex]["nl"] and lv == y["nl"]:
             newInstance = PatternInstance(g, list(instance.dfsTree) + [(tu, tv, x, y.index)])
-            patternInstances.add(newInstance)
-
+            patternInstances[instance].add(newInstance)
   return patternInstances
 
 def createInstanceGraphForPattern(pattern):
@@ -304,6 +305,8 @@ def createInstanceGraphForPattern(pattern):
   patternInstances = list(PATTERN_INSTANCES[pattern])
   for instance in patternInstances:
     instanceGraph.add_vertex()
+    vertex = instanceGraph.vs[len(instanceGraph.vs) - 1]
+    vertex["instance"] = instance
   
   for i in range(0, len(patternInstances) - 1):
     for j in range(i+1, len(patternInstances)):
@@ -314,15 +317,7 @@ def createInstanceGraphForPattern(pattern):
 
   return instanceGraph
 
-def printInstances(g, p):
-  '''Print the instances of pattern @p. Used for debugging '''
-  print "Pattern = %s:"%str(p)
-  for i in PATTERN_INSTANCES[p]:
-    print "%s"%str(i)
-  
-
-def gminer(g, t, s):
-  ''' The main algorithm. @g is the graph, @t is the threshold, @s is the frequent subgraph set. '''
+def createTwoEdgeGraphs(g):
   for (u, v) in getOneEdgeSubgraph(g):
     for x in v.neighbors():
       if x.index == u.index:
@@ -335,7 +330,13 @@ def gminer(g, t, s):
       PATTERN_INSTANCES[p] = set([])
       createTwoEdgeInstances(g, p)
       for cp in getChildPatterns(g, p):
-        PATTERN_INSTANCES[cp] =  getPatternInstances(g, cp, p)
+        if cp in PATTERN_INSTANCES:
+          continue
+        patternInstances = getPatternInstances(g, cp, p)
+        allInstances = set([])
+        for instances in patternInstances.values():
+          allInstances = allInstances.union(instances)
+        PATTERN_INSTANCES[cp] =  allInstances
 
     for x in u.neighbors():
       if x.index == v.index:
@@ -348,7 +349,122 @@ def gminer(g, t, s):
       PATTERN_INSTANCES[p] = set([])
       createTwoEdgeInstances(g, p)
       for cp in sorted(getChildPatterns(g, p), key=lambda x: x.dfsCode()):
-        PATTERN_INSTANCES[cp] =  getPatternInstances(g, cp, p)
+        if cp in PATTERN_INSTANCES:
+          continue
+        patternInstances = getPatternInstances(g, cp, p)
+        allInstances = set([])
+        for instances in patternInstances.values():
+          allInstances = allInstances.union(instances)
+        PATTERN_INSTANCES[cp] =  allInstances
+
+def isNeighboringCluster(cluster1, cluster2, g):
+  #Check if clusters 1 and 2 are neighbors. i.e. they have vertices that share an edge
+  for u in cluster1:
+    for v in cluster2:
+      if g[u,v] == 1:
+        return True
+  return False
+  
+def mergePartitions(clustering, g):
+  modularity = clustering.modularity
+  newMembership = clustering.membership
+  clusterIndices = list(set(clustering.membership))
+  for i in range(0,len(clusterIndices) - 1):
+    for j in range(i+1, len(clusterIndices)):
+      #Check if the ith and jth clusters are neighbors. i.e. they have vertices that share an edge
+      cxi = clusterIndices[i]
+      cxj = clusterIndices[j]
+      if isNeighboringCluster(clustering[cxi], clustering[cxj], g):
+        #Merge clusters and see if the modularity value increases
+        m = map(lambda x: cxi if x==cxj else x, newMembership) #Replaces cluster index j with i
+        newClustering = igraph.clustering.VertexClustering(g, membership=m)
+        if newClustering.modularity <= modularity:
+          continue
+        print "modularity increased from %f to %f"%(modularity,newClustering.modularity)
+        modularity = newClustering.modularity
+        newMembership = m
+  if id(clustering.membership) == id(newMembership):
+    #The modularity didn't increase. So return the original clustering.
+    return clustering
+
+  # Renumber cluster ids so that cluster ids are continuous from 0.
+  clusterIdMap = {}
+  currentId = -1
+  renumberedMembership = []
+  for cid in newMembership:
+    if cid not in clusterIdMap:
+      currentId += 1
+      clusterIdMap[cid] = currentId
+
+    renumberedMembership.append(clusterIdMap[cid])
+
+  return VertexClustering(g, membership=renumberedMembership)
+ 
+def subgraphMining(g, pattern, ig, clustering, frequentPatterns):
+  print "Subgraph mining for pattern: %s"%str(pattern)
+  clustering = mergePartitions(clustering, ig)
+  gMeasure = len(clustering)
+  if gMeasure < 2: #TODO: Remove hadcoded threshold
+    return
+
+  frequentPatterns.add(pattern)
+
+  #Get child patterns
+  for cp in getChildPatterns(g, pattern):
+    if cp in PATTERN_INSTANCES:
+      continue
+    patternInstances = getPatternInstances(g, cp, pattern)
+    # Get all instances of child pattern
+    allInstances = set([])
+    for instances in patternInstances.values():
+      allInstances = allInstances.union(instances)
+    PATTERN_INSTANCES[cp] = allInstances
+
+    #Create instance graph of child pattern
+    childIg = createInstanceGraphForPattern(cp)
+    #Assign child instances to clusters based on parent clusters
+    clusterId = 0
+    membership = []
+    for cluster in clustering:
+      print "Cluster: %s"%str(cluster)
+      for vertexIndex in cluster:
+        parentInstance = ig.vs[vertexIndex]["instance"]
+        childInstances = patternInstances[parentInstance]
+        if not childInstances:
+          continue
+        print "Parent instance: %s"%str(parentInstance)
+        print "Child instances: %d"%len(childInstances)
+        print "membership: %s"%(",".join(map(str, membership)))
+        membership += [clusterId]*len(childInstances)
+      clusterId += 1
+   
+    try:
+      childIgClustering = VertexClustering(childIg, membership=membership)
+    except ValueError:
+      print "membership: %s"%(",".join(map(str, membership)))
+      print "childIg: %s"%(",".join([str(v.index) for v in childIg.vs]))
+      raise Exception("weird")
+
+    subgraphMining(g, cp, childIg, childIgClustering, frequentPatterns)
+  return
+
+def printInstances(g, p):
+  '''Print the instances of pattern @p. Used for debugging '''
+  print "Pattern = %s:"%str(p)
+  for i in PATTERN_INSTANCES[p]:
+    print "%s"%str(i)
+
+def gminer(g, t, s):
+  ''' The main algorithm. @g is the graph, @t is the threshold, @s is the frequent subgraph set. '''
+  frequentPatterns = set([])
+  createTwoEdgeGraphs(g)
+  twoEdgePatterns = PATTERN_INSTANCES.keys()
+  for pattern in twoEdgePatterns:
+    ig = createInstanceGraphForPattern(pattern)
+    clustering = ig.components()
+    subgraphMining(g, pattern, ig, clustering, frequentPatterns)
+
+  return frequentPatterns
 
 
 #########Test Harness ##################
@@ -387,22 +503,15 @@ def main():
 
   vertexLabels = zip(g.vs["nl"], [str(v.index) for v in g.vs])
   vertexLabels = map(lambda (x, y): x+y, vertexLabels)
-  gminer(g, 1, None)
-  
-  instanceGraphs = []
-  for pattern in PATTERN_INSTANCES.keys():
-    ig = createInstanceGraphForPattern(pattern)
-    instanceGraphs.append(ig)
 
-  instanceIndex = 15
-  #plotGraph(g, vertexLabels, g.es["nl"])
-  testPattern = (PATTERN_INSTANCES.keys())[instanceIndex]
-  print "Pattern: %s"%testPattern
-  print "Instances:"
-  for i in PATTERN_INSTANCES[testPattern]:
-    print i
-  instanceLabels = [str(v.index) for v in instanceGraphs[instanceIndex].vs]
-  plotGraph(instanceGraphs[instanceIndex], instanceLabels, [])
+  #label = map(lambda (x,y): "%s_%d"%(x,y), zip(g.vs["nl"], g.vs.indices))
+  #plotGraph(g, label, g.es["nl"])
+
+  frequentPatterns = gminer(g, 1, None)
+  print "Frequent Patterns:"
+  for p in frequentPatterns:
+    print p
+  
   
 if __name__ == "__main__":
   sys.exit(main())
